@@ -1,6 +1,7 @@
 import type { AgentEvent, AgentRunRequest, BiQueryResult } from "@bi-agent/contracts";
 import { buildAnswer } from "./answer-builder.js";
 import { queryBusinessData } from "./bi-client.js";
+import { getMockConfigSnapshot } from "./config/model-profiles.js";
 import { inferDays, inferIntent } from "./intent.js";
 import { runWithPi } from "./runtime-pi.js";
 
@@ -34,6 +35,12 @@ async function* runMock(
   signal?: AbortSignal,
 ): AsyncGenerator<AgentEvent> {
   yield { type: "run.started", runId: request.runId, timestamp: timestamp() };
+  yield {
+    type: "run.configured",
+    runId: request.runId,
+    timestamp: timestamp(),
+    config: getMockConfigSnapshot(),
+  };
   yield step(request, "intent", "正在识别指标、维度和时间范围", "running");
   await wait(180, signal);
   const intent = inferIntent(request.message, request.context.biState.intent);

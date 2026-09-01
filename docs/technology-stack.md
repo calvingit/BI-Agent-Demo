@@ -104,6 +104,11 @@ Demo 提供两种 Runtime：
 - 模型只负责把自然语言映射到受支持的查询工具并解释结果；
 - 不向模型暴露 SQL、数据库凭证和权限列表；
 - 模型调用失败时不能绕过业务查询服务。
+- 通过 Model Profile 同时切换 Prompt、上下文、推理参数和部署；
+- Profile 与 Prompt 使用独立版本，实际配置保存到 Agent Run；
+- 备用模型加载独立 Profile，不继承主模型参数。
+
+具体配置见[模型配置与 Prompt 管理](model-profiles.md)。
 
 ## 暂不采用的技术
 

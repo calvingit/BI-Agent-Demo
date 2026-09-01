@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
+  AgentRunConfigSnapshot,
   BiAnswer,
   BiConversationState,
   BiQueryRequest,
@@ -95,6 +96,14 @@ export function initializeDatabase(): void {
       reserved_credits INTEGER NOT NULL,
       used_credits INTEGER,
       error_code TEXT,
+      agent_mode TEXT,
+      model_profile_id TEXT,
+      model_profile_version TEXT,
+      prompt_id TEXT,
+      prompt_version TEXT,
+      provider TEXT,
+      model_id TEXT,
+      config_hash TEXT,
       created_at TEXT NOT NULL,
       completed_at TEXT
     );
@@ -124,6 +133,25 @@ export function initializeDatabase(): void {
     CREATE INDEX IF NOT EXISTS idx_metrics_date_shop
       ON daily_shop_metrics(date, shop_id);
   `);
+
+  const runColumns = new Set(
+    (sqlite.prepare("PRAGMA table_info(agent_runs)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  );
+  const configColumns = [
+    ["agent_mode", "TEXT"],
+    ["model_profile_id", "TEXT"],
+    ["model_profile_version", "TEXT"],
+    ["prompt_id", "TEXT"],
+    ["prompt_version", "TEXT"],
+    ["provider", "TEXT"],
+    ["model_id", "TEXT"],
+    ["config_hash", "TEXT"],
+  ] as const;
+  for (const [column, type] of configColumns) {
+    if (!runColumns.has(column)) sqlite.exec(`ALTER TABLE agent_runs ADD COLUMN ${column} ${type}`);
+  }
 }
 
 export function seedDemoData(force = false): void {
@@ -482,6 +510,40 @@ export function updateAgentRun(input: {
       now(),
       input.runId,
     );
+}
+
+export function updateAgentRunConfig(runId: string, config: AgentRunConfigSnapshot): void {
+  sqlite
+    .prepare(`
+      UPDATE agent_runs
+      SET agent_mode = ?, model_profile_id = ?, model_profile_version = ?,
+          prompt_id = ?, prompt_version = ?, provider = ?, model_id = ?, config_hash = ?
+      WHERE id = ?
+    `)
+    .run(
+      config.mode,
+      config.profileId,
+      config.profileVersion,
+      config.promptId,
+      config.promptVersion,
+      config.provider,
+      config.model,
+      config.configHash,
+      runId,
+    );
+}
+
+export function getAgentRunConfig(runId: string): AgentRunConfigSnapshot | null {
+  const row = sqlite
+    .prepare(`
+      SELECT agent_mode AS mode, model_profile_id AS profileId,
+             model_profile_version AS profileVersion, prompt_id AS promptId,
+             prompt_version AS promptVersion, provider, model_id AS model,
+             config_hash AS configHash
+      FROM agent_runs WHERE id = ?
+    `)
+    .get(runId) as AgentRunConfigSnapshot | undefined;
+  return row?.mode ? row : null;
 }
 
 function isoDateDaysAgo(days: number): string {

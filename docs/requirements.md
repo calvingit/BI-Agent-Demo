@@ -58,6 +58,8 @@
 - 前端可以看到意图、权限、查询、分析和渲染阶段；
 - 用户可以取消正在执行的 Run；
 - Run 必须以 `answer.completed` 或 `run.failed` 结束。
+- 每次模型尝试必须记录实际 Model Profile、Prompt 版本、模型和配置 Hash；
+- 切换备用模型时必须加载备用模型自己的完整 Profile。
 
 ### FR-06 BI 查询
 
@@ -151,3 +153,4 @@ MVP 支持：
 - 单元测试通过；
 - 所有 Workspace 可以构建；
 - 共享 API 数据必须经过 Zod Schema 校验。
+- Model Profile 和 Prompt 必须版本化，历史 Run 可以追溯到实际配置。

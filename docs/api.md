@@ -143,6 +143,30 @@ complaint-analysis
 
 `step`：`intent | permission | query | analysis | render`。
 
+### `run.configured`
+
+Agent 每次尝试模型 Profile 前发送。切换备用模型时会再次发送，业务 API 使用最新事件更新 `agent_runs` 配置快照。
+
+```json
+{
+  "type": "run.configured",
+  "runId": "run_xxx",
+  "timestamp": "2026-09-01T08:00:00.000Z",
+  "config": {
+    "mode": "pi",
+    "profileId": "openai-compatible-bi-v1",
+    "profileVersion": "1.0.0",
+    "promptId": "bi-analyst-openai",
+    "promptVersion": "1.0.0",
+    "provider": "duoke-primary-gateway",
+    "model": "configured-model-id",
+    "configHash": "64-character-sha256"
+  }
+}
+```
+
+快照不包含 API Key 和 Gateway 地址。
+
 ### `answer.delta`
 
 只用于即时文字反馈，不持久化为最终消息。

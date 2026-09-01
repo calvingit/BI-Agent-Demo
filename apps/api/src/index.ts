@@ -25,6 +25,7 @@ import {
   reserveQuota,
   settleQuota,
   updateAgentRun,
+  updateAgentRunConfig,
   updateConversationState,
 } from "@bi-agent/database";
 import { randomUUID } from "node:crypto";
@@ -178,6 +179,9 @@ app.post("/api/conversations/:conversationId/messages", async (c) => {
           for (const line of lines) {
             if (!line.trim()) continue;
             const event = AgentEventSchema.parse(JSON.parse(line));
+            if (event.type === "run.configured") {
+              updateAgentRunConfig(runId, event.config);
+            }
             send(event);
             if (event.type === "answer.completed") {
               const assistantMessageId = createMessage({

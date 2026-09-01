@@ -30,6 +30,7 @@ Demo 中 API Gateway 和多客业务 API 合并在 `apps/api`，生产环境可�
 | Web | 对话、流式状态、图表、历史会话 | 权限判断、指标计算 |
 | 业务 API | 身份、租户、积分、权限快照、会话、消息、Run | 自然语言理解 |
 | BI Agent | 上下文构造、Pi Loop、工具选择、结果解释 | 用户账户、原始 SQL、权限来源 |
+| Model Profile Registry | 绑定模型、Prompt、上下文和推理参数 | 业务权限和积分规则 |
 | AI Gateway | 模型路由、协议适配、密钥、限流、成本 | 经营数据和用户会话 |
 | BI Query API | 权限校验、聚合、指标公式、查询预算 | 文本生成 |
 | SQLite | Demo 业务状态和经营指标 | 生产数据仓库能力 |
@@ -47,6 +48,7 @@ sequenceDiagram
     W->>B: 提交用户问题
     B->>B: 保存消息、预占积分、创建权限快照和 Run
     B->>A: AgentRunRequest
+    A-->>B: run.configured / Profile 快照
     A->>M: 问题、受限工具和最小上下文
     M-->>A: query_business_metrics Tool Call
     A->>Q: permission_snapshot_id + intent + days
@@ -60,6 +62,8 @@ sequenceDiagram
 ```
 
 Mock 模式省略两次模型调用，但保留其余全部边界。
+
+模型配置通过 `ModelProfile Registry` 选择。Profile 绑定部署变量、Prompt 版本、上下文策略、推理参数和失败策略；权限与查询限制由独立 Business Policy 强制执行。详细说明见[模型配置与 Prompt 管理](model-profiles.md)。
 
 ## 5. Agent Loop
 
@@ -94,6 +98,7 @@ query_business_metrics({
 | 单次执行 | `run_id` | 业务数据库 |
 | BI 查询快照 | `dataset_id` | BI 服务；Demo 只返回 ID |
 | 模型请求 | Provider Response ID | AI Gateway Trace |
+| 模型配置 | `profile_id + version + config_hash` | 业务数据库 `agent_runs` |
 
 完整历史消息和模型上下文不是同一份数据。
 
@@ -144,6 +149,7 @@ stateDiagram-v2
 
 ```text
 run.started
+run.configured
 analysis.step
 answer.delta
 answer.completed | run.failed

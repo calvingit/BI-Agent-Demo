@@ -37,6 +37,7 @@ docs/
 ├── requirements.md
 ├── architecture.md
 ├── technology-stack.md
+├── model-profiles.md
 └── api.md
 ```
 
@@ -72,12 +73,15 @@ npm run dev
 
 ```dotenv
 AGENT_MODE=pi
+AGENT_MODEL_PROFILE=openai-compatible-bi-v1
 AI_GATEWAY_BASE_URL=https://your-gateway.example.com/v1
 AI_GATEWAY_API_KEY=your-key
 AI_GATEWAY_MODEL=your-model-id
 ```
 
 当前适配器使用 OpenAI-compatible Chat Completions 协议。Pi 负责 Agent Loop 和工具调用，模型不能直接访问 SQLite，也不能自行传入用户或店铺权限。真实模式下，模型选择 `query_business_metrics` 工具，查询结果仍由业务后端计算和授权。
+
+模型不是通过一个孤立的 `modelId` 切换。`AGENT_MODEL_PROFILE` 会同时选择版本化 Prompt、上下文策略、推理参数、超时和备用 Profile。配置与扩展方式见[模型配置与 Prompt 管理](docs/model-profiles.md)。
 
 ## 验证
 
@@ -92,6 +96,7 @@ npm run build
 - [需求与验收标准](docs/requirements.md)
 - [架构设计](docs/architecture.md)
 - [技术栈与选型](docs/technology-stack.md)
+- [模型配置与 Prompt 管理](docs/model-profiles.md)
 - [API 与事件协议](docs/api.md)
 
 ## Demo 边界

@@ -137,6 +137,18 @@ export const AgentRunRequestSchema = z.object({
 });
 export type AgentRunRequest = z.infer<typeof AgentRunRequestSchema>;
 
+export const AgentRunConfigSnapshotSchema = z.object({
+  mode: z.enum(["mock", "pi"]),
+  profileId: z.string(),
+  profileVersion: z.string(),
+  promptId: z.string(),
+  promptVersion: z.string(),
+  provider: z.string(),
+  model: z.string(),
+  configHash: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export type AgentRunConfigSnapshot = z.infer<typeof AgentRunConfigSnapshotSchema>;
+
 export const BiQueryIntentSchema = z.enum([
   "overview",
   "refund-ranking",
@@ -171,6 +183,12 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
     type: z.literal("run.started"),
     runId: z.string(),
     timestamp: z.string(),
+  }),
+  z.object({
+    type: z.literal("run.configured"),
+    runId: z.string(),
+    timestamp: z.string(),
+    config: AgentRunConfigSnapshotSchema,
   }),
   z.object({
     type: z.literal("analysis.step"),

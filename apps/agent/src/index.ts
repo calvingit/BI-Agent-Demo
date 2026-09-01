@@ -3,16 +3,23 @@ import { AgentRunRequestSchema, type AgentEvent } from "@bi-agent/contracts";
 import { fileURLToPath } from "node:url";
 import { config } from "dotenv";
 import { Hono } from "hono";
+import { getSelectedProfileId } from "./config/model-profiles.js";
 import { runAgent } from "./runtime.js";
 
 config({ path: fileURLToPath(new URL("../../../.env", import.meta.url)), quiet: true });
 
 const port = Number(process.env.AGENT_PORT ?? 4001);
 const internalToken = process.env.INTERNAL_SERVICE_TOKEN ?? "local-demo-token";
+const agentMode = process.env.AGENT_MODE ?? "mock";
 const app = new Hono();
 
 app.get("/health", (c) =>
-  c.json({ service: "bi-agent", status: "ok", mode: process.env.AGENT_MODE ?? "mock" }),
+  c.json({
+    service: "bi-agent",
+    status: "ok",
+    mode: agentMode,
+    profile: agentMode === "pi" ? getSelectedProfileId() : "deterministic-demo-v1",
+  }),
 );
 
 app.post("/internal/runs", async (c) => {

@@ -16,49 +16,46 @@ import type {
 } from "@bi-agent/contracts";
 import { buildAnswer } from "./answer-builder.js";
 import { queryBusinessData } from "./bi-client.js";
+import {
+  getModelProfile,
+  getSelectedProfileId,
+  isProfileConfigured,
+  resolveModelProfile,
+  type ResolvedModelProfile,
+} from "./config/model-profiles.js";
+import { BI_AGENT_POLICY } from "./config/policy.js";
 import { inferDays, inferIntent } from "./intent.js";
-
-const intents = [
-  "overview",
-  "refund-ranking",
-  "revenue-trend",
-  "response-ranking",
-  "complaint-analysis",
-] as const;
 
 function timestamp(): string {
   return new Date().toISOString();
 }
 
-function createGatewayModel(): {
+function createGatewayRuntime(resolved: ResolvedModelProfile): {
   model: Model<"openai-completions">;
   streamFn: ReturnType<typeof createModels>["streamSimple"];
 } {
-  const baseUrl = process.env.AI_GATEWAY_BASE_URL;
-  const apiKey = process.env.AI_GATEWAY_API_KEY;
-  const modelId = process.env.AI_GATEWAY_MODEL;
-  if (!baseUrl || !apiKey || !modelId) {
-    throw new Error("PI_CONFIG_MISSING: AI_GATEWAY_BASE_URL, AI_GATEWAY_API_KEY and AI_GATEWAY_MODEL are required");
-  }
+  const { profile } = resolved;
   const model: Model<"openai-completions"> = {
-    id: modelId,
-    name: modelId,
-    api: "openai-completions",
-    provider: "duoke-ai-gateway",
-    baseUrl,
-    reasoning: true,
+    id: resolved.modelId,
+    name: resolved.modelId,
+    api: profile.adapter,
+    provider: profile.deployment.providerId,
+    baseUrl: resolved.baseUrl,
+    reasoning: profile.model.reasoning,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8_192,
+    contextWindow: profile.model.contextWindow,
+    maxTokens: profile.model.maxTokens,
   };
   const models = createModels();
   models.setProvider(
     createProvider({
-      id: "duoke-ai-gateway",
-      name: "Duoke AI Gateway",
-      baseUrl,
-      auth: { apiKey: envApiKeyAuth("Duoke AI Gateway key", ["AI_GATEWAY_API_KEY"]) },
+      id: profile.deployment.providerId,
+      name: profile.deployment.providerName,
+      baseUrl: resolved.baseUrl,
+      auth: {
+        apiKey: envApiKeyAuth(`${profile.deployment.providerName} key`, [profile.deployment.apiKeyEnv]),
+      },
       models: [model],
       api: openAICompletionsApi(),
     }),
@@ -71,33 +68,32 @@ function extractLastAssistantText(agent: Agent): string | undefined {
   return assistant?.role === "assistant" ? contentText(assistant.content) : undefined;
 }
 
-export async function* runWithPi(
+async function executeProfileAttempt(
   request: AgentRunRequest,
+  resolved: ResolvedModelProfile,
   signal?: AbortSignal,
-): AsyncGenerator<DuokeAgentEvent> {
-  yield { type: "run.started", runId: request.runId, timestamp: timestamp() };
-  yield {
-    type: "analysis.step",
-    runId: request.runId,
-    timestamp: timestamp(),
-    step: "intent",
-    label: "Pi 正在规划受限 BI 工具调用",
-    status: "running",
-  };
-
-  const { model, streamFn } = createGatewayModel();
+): Promise<{
+  queryResult: BiQueryResult;
+  selectedIntent: BiQueryIntent;
+  assistantText?: string;
+}> {
+  const { profile } = resolved;
+  const { model, streamFn } = createGatewayRuntime(resolved);
   let queryResult: BiQueryResult | undefined;
   let selectedIntent: BiQueryIntent | undefined;
   const queryParameters = Type.Object({
-    intent: Type.Union(intents.map((intent) => Type.Literal(intent))),
-    days: Type.Integer({ minimum: 7, maximum: 90 }),
+    intent: Type.Union(BI_AGENT_POLICY.allowedIntents.map((intent) => Type.Literal(intent))),
+    days: Type.Integer({
+      minimum: BI_AGENT_POLICY.minQueryDays,
+      maximum: BI_AGENT_POLICY.maxQueryDays,
+    }),
   });
   const queryTool: AgentTool<typeof queryParameters, BiQueryResult> = {
-    name: "query_business_metrics",
+    name: BI_AGENT_POLICY.toolName,
     label: "查询经营指标",
-    description: "查询用户有权访问的经营指标。必须选择一个受支持的意图和 7 到 90 天的时间范围。",
+    description: `查询用户有权访问的经营指标。必须选择受支持的意图和 ${BI_AGENT_POLICY.minQueryDays} 到 ${BI_AGENT_POLICY.maxQueryDays} 天的时间范围。`,
     parameters: queryParameters,
-    executionMode: "sequential",
+    executionMode: profile.tools.executionMode,
     execute: async (_toolCallId, params, toolSignal) => {
       selectedIntent = params.intent as BiQueryIntent;
       queryResult = await queryBusinessData({
@@ -115,16 +111,14 @@ export async function* runWithPi(
     },
   };
 
+  const recentMessages = request.context.recentMessages.slice(-profile.agent.recentMessageLimit);
   const agent = new Agent({
     initialState: {
-      systemPrompt: `你是多客 BI 分析编排器。你不能直接查询数据库，也不能编造指标。
-对每个用户问题必须调用 query_business_metrics 恰好一次。
-工具返回后，用中文给出不超过 120 字的结论，只陈述工具数据支持的事实。
-归因只能表述为贡献或待验证假设，不得声称因果关系。不要展示内部思考过程。`,
+      systemPrompt: resolved.systemPrompt,
       model,
-      thinkingLevel: "medium",
+      thinkingLevel: profile.agent.thinkingLevel,
       tools: [queryTool],
-      messages: request.context.recentMessages.map((message) => ({
+      messages: recentMessages.map((message) => ({
         role: "user" as const,
         content: `${message.role === "assistant" ? "上一轮回答" : "用户"}：${message.text}`,
         timestamp: Date.now(),
@@ -132,14 +126,33 @@ export async function* runWithPi(
     },
     streamFn,
     sessionId: request.conversationId,
-    toolExecution: "sequential",
+    maxRetryDelayMs: profile.agent.maxRetryDelayMs,
+    toolExecution: profile.tools.executionMode,
     beforeToolCall: async ({ toolCall }) =>
-      toolCall.name === "query_business_metrics"
+      toolCall.name === BI_AGENT_POLICY.toolName
         ? undefined
         : { block: true, reason: "Tool is not allowed", terminate: true },
   });
-  signal?.addEventListener("abort", () => agent.abort(), { once: true });
-  await agent.prompt(request.message);
+
+  let timedOut = false;
+  const abortAgent = () => agent.abort();
+  signal?.addEventListener("abort", abortAgent, { once: true });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    agent.abort();
+  }, profile.reliability.timeoutMs);
+  try {
+    await agent.prompt(request.message);
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abortAgent);
+  }
+
+  if (signal?.aborted) throw new DOMException("Run cancelled", "AbortError");
+  if (timedOut) throw new Error(`MODEL_TIMEOUT:${profile.id}`);
+  if (agent.state.errorMessage) {
+    throw new Error(`MODEL_PROVIDER_ERROR:${profile.id}:${agent.state.errorMessage}`);
+  }
 
   if (!queryResult || !selectedIntent) {
     selectedIntent = inferIntent(request.message, request.context.biState.intent);
@@ -152,7 +165,85 @@ export async function* runWithPi(
       ...(signal ? { signal } : {}),
     });
   }
-  const { answer, biState } = buildAnswer(selectedIntent, queryResult, extractLastAssistantText(agent));
+
+  const assistantText = extractLastAssistantText(agent);
+  return {
+    queryResult,
+    selectedIntent,
+    ...(assistantText ? { assistantText } : {}),
+  };
+}
+
+function canFallback(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === "AbortError") return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.startsWith("MODEL_TIMEOUT:") || message.startsWith("MODEL_PROVIDER_ERROR:");
+}
+
+export async function* runWithPi(
+  request: AgentRunRequest,
+  signal?: AbortSignal,
+): AsyncGenerator<DuokeAgentEvent> {
+  yield { type: "run.started", runId: request.runId, timestamp: timestamp() };
+  yield {
+    type: "analysis.step",
+    runId: request.runId,
+    timestamp: timestamp(),
+    step: "intent",
+    label: "Pi 正在规划受限 BI 工具调用",
+    status: "running",
+  };
+
+  let profileId = getSelectedProfileId();
+  const attemptedProfiles = new Set<string>();
+  let completed:
+    | {
+        result: Awaited<ReturnType<typeof executeProfileAttempt>>;
+        resolved: ResolvedModelProfile;
+      }
+    | undefined;
+
+  while (!completed) {
+    if (attemptedProfiles.has(profileId)) throw new Error(`MODEL_PROFILE_FALLBACK_LOOP:${profileId}`);
+    attemptedProfiles.add(profileId);
+    const resolved = resolveModelProfile(profileId);
+    yield {
+      type: "run.configured",
+      runId: request.runId,
+      timestamp: timestamp(),
+      config: resolved.snapshot,
+    };
+    try {
+      completed = { result: await executeProfileAttempt(request, resolved, signal), resolved };
+    } catch (error) {
+      const fallbackProfileId = getModelProfile(profileId).reliability.fallbackProfileId;
+      if (!canFallback(error) || !fallbackProfileId || !isProfileConfigured(fallbackProfileId)) throw error;
+      yield {
+        type: "analysis.step",
+        runId: request.runId,
+        timestamp: timestamp(),
+        step: "analysis",
+        label: "主模型调用失败，正在切换备用模型配置",
+        status: "running",
+      };
+      profileId = fallbackProfileId;
+    }
+  }
+
+  const { result, resolved } = completed;
+  const { answer, biState } = buildAnswer(
+    result.selectedIntent,
+    result.queryResult,
+    result.assistantText,
+  );
+  yield {
+    type: "analysis.step",
+    runId: request.runId,
+    timestamp: timestamp(),
+    step: "intent",
+    label: `已使用模型配置：${resolved.profile.id}@${resolved.profile.version}`,
+    status: "completed",
+  };
   yield {
     type: "analysis.step",
     runId: request.runId,
@@ -168,8 +259,8 @@ export async function* runWithPi(
     answer,
     biState,
     usage: {
-      provider: "duoke-ai-gateway",
-      model: model.id,
+      provider: resolved.snapshot.provider,
+      model: resolved.snapshot.model,
       inputTokens: 0,
       outputTokens: 0,
       credits: 5,

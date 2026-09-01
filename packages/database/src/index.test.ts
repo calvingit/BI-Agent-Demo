@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  createAgentRun,
+  createMessage,
   createPermissionSnapshot,
   executeBiQuery,
+  getAgentRunConfig,
   getPermissionSnapshot,
   getUserShops,
   seedDemoData,
+  updateAgentRunConfig,
 } from "./index.js";
 
 describe("BI query authorization", () => {
@@ -42,5 +46,35 @@ describe("BI query authorization", () => {
         timezone: "Asia/Singapore",
       }),
     ).toThrow("PERMISSION_DENIED");
+  });
+
+  it("stores the model and prompt configuration used by a run", () => {
+    const runId = "run_config_snapshot_test";
+    const userMessageId = createMessage({
+      conversationId: "conv_demo",
+      role: "user",
+      text: "测试配置快照",
+    });
+    createAgentRun({
+      runId,
+      conversationId: "conv_demo",
+      userMessageId,
+      reservedCredits: 8,
+    });
+    updateAgentRunConfig(runId, {
+      mode: "pi",
+      profileId: "openai-compatible-bi-v1",
+      profileVersion: "1.0.0",
+      promptId: "bi-analyst-openai",
+      promptVersion: "1.0.0",
+      provider: "duoke-primary-gateway",
+      model: "test-model",
+      configHash: "a".repeat(64),
+    });
+    expect(getAgentRunConfig(runId)).toMatchObject({
+      profileId: "openai-compatible-bi-v1",
+      promptVersion: "1.0.0",
+      model: "test-model",
+    });
   });
 });
