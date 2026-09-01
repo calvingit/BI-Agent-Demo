@@ -1,0 +1,18 @@
+{
+  "name": "@bi-agent/database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --platform node --out-dir dist",
+    "typecheck": "tsc --noEmit",
+    "seed": "tsx src/seed-cli.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "13.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13"
+  }
+}

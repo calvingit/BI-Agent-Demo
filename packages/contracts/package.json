@@ -1,0 +1,14 @@
+{
+  "name": "@bi-agent/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --out-dir dist --external zod",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "4.5.4"
+  }
+}

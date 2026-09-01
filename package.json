@@ -1,0 +1,27 @@
+{
+  "name": "bi-agent-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail --names web,api,agent --prefix-colors cyan,green,magenta \"npm run dev -w @bi-agent/web\" \"npm run dev -w @bi-agent/api\" \"npm run dev -w @bi-agent/agent\"",
+    "build": "npm run build -w @bi-agent/contracts && npm run build -w @bi-agent/database && npm run build -w @bi-agent/agent && npm run build -w @bi-agent/api && npm run build -w @bi-agent/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "db:seed": "npm run seed -w @bi-agent/database"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.5",
+    "tsx": "4.23.13",
+    "tsup": "8.5.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  }
+}
