@@ -1,10 +1,22 @@
 import {
   AgentEventSchema,
+  AgentConfigCatalogSchema,
   BootstrapResponseSchema,
+  EvalDatasetDetailSchema,
+  EvalDatasetSchema,
+  EvalOverviewSchema,
+  EvalRunDetailSchema,
+  EvalRunSchema,
   StoredMessageSchema,
   type AgentEvent,
+  type AgentConfigCatalog,
   type BootstrapResponse,
   type Conversation,
+  type EvalDataset,
+  type EvalDatasetDetail,
+  type EvalOverview,
+  type EvalRun,
+  type EvalRunDetail,
   type StoredMessage,
 } from "@bi-agent/contracts";
 
@@ -81,5 +93,59 @@ export async function cancelRun(runId: string): Promise<void> {
       method: "POST",
       headers,
     }),
+  );
+}
+
+export async function getAgentConfig(): Promise<AgentConfigCatalog> {
+  return AgentConfigCatalogSchema.parse(
+    await json(await fetch(`${API_BASE}/api/admin/agent-config`, { headers })),
+  );
+}
+
+export async function getEvalOverview(): Promise<EvalOverview> {
+  return EvalOverviewSchema.parse(
+    await json(await fetch(`${API_BASE}/api/admin/evals/overview`, { headers })),
+  );
+}
+
+export async function getEvalDatasets(): Promise<EvalDataset[]> {
+  const result = await json<unknown[]>(
+    await fetch(`${API_BASE}/api/admin/evals/datasets`, { headers }),
+  );
+  return result.map((item) => EvalDatasetSchema.parse(item));
+}
+
+export async function getEvalDataset(datasetId: string): Promise<EvalDatasetDetail> {
+  return EvalDatasetDetailSchema.parse(
+    await json(await fetch(`${API_BASE}/api/admin/evals/datasets/${datasetId}`, { headers })),
+  );
+}
+
+export async function getEvalRuns(): Promise<EvalRun[]> {
+  const result = await json<unknown[]>(
+    await fetch(`${API_BASE}/api/admin/evals/runs`, { headers }),
+  );
+  return result.map((item) => EvalRunSchema.parse(item));
+}
+
+export async function getEvalRun(runId: string): Promise<EvalRunDetail> {
+  return EvalRunDetailSchema.parse(
+    await json(await fetch(`${API_BASE}/api/admin/evals/runs/${runId}`, { headers })),
+  );
+}
+
+export async function startEvalRun(input: {
+  datasetId: string;
+  profileId?: string;
+  concurrency?: number;
+}): Promise<EvalRun> {
+  return EvalRunSchema.parse(
+    await json(
+      await fetch(`${API_BASE}/api/admin/evals/runs`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(input),
+      }),
+    ),
   );
 }

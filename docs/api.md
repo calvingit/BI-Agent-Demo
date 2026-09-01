@@ -49,7 +49,33 @@ x-demo-user-id: user_demo
 
 取消当前进程中正在运行的 Agent Run。生产环境需要使用分布式 Run Registry。
 
-## 2. 内部 API
+## 2. Eval 管理 API
+
+Demo 与公共业务 API 使用相同的演示身份中间件。生产环境必须增加独立管理员权限。
+
+```text
+GET  /api/admin/agent-config
+GET  /api/admin/evals/overview
+GET  /api/admin/evals/datasets
+GET  /api/admin/evals/datasets/:datasetId
+GET  /api/admin/evals/runs
+GET  /api/admin/evals/runs/:runId
+POST /api/admin/evals/runs
+```
+
+启动评测：
+
+```json
+{
+  "datasetId": "eval_ds_core_v1",
+  "profileId": "openai-compatible-bi-v1",
+  "concurrency": 3
+}
+```
+
+返回 `202`。管理界面轮询 Run Detail，直到状态变为 `completed` 或 `failed`。
+
+## 3. 内部 API
 
 内部接口使用：
 
@@ -116,7 +142,7 @@ response-ranking
 complaint-analysis
 ```
 
-## 3. Agent Events
+## 4. Agent Events
 
 ### `run.started`
 
@@ -180,6 +206,10 @@ Agent 每次尝试模型 Profile 前发送。切换备用模型时会再次发�
 }
 ```
 
+### `tool.started` / `tool.completed`
+
+记录 Tool 名称、参数、状态、耗时和输出。它们通过 Agent 内部流传给业务 API，但不会转发到卖家聊天界面。
+
 ### `answer.completed`
 
 包含经过 Zod 校验的完整 `BiAnswer`、更新后的 BI State 和模型用量。业务后端收到该事件后保存消息并结算积分。
@@ -197,7 +227,7 @@ Agent 每次尝试模型 Profile 前发送。切换备用模型时会再次发�
 }
 ```
 
-## 4. Schema 来源
+## 5. Schema 来源
 
 所有请求、响应和事件类型定义在：
 

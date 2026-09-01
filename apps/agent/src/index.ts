@@ -3,7 +3,12 @@ import { AgentRunRequestSchema, type AgentEvent } from "@bi-agent/contracts";
 import { fileURLToPath } from "node:url";
 import { config } from "dotenv";
 import { Hono } from "hono";
-import { getSelectedProfileId } from "./config/model-profiles.js";
+import {
+  getSelectedProfileId,
+  isProfileConfigured,
+  listModelProfiles,
+} from "./config/model-profiles.js";
+import { BI_AGENT_POLICY } from "./config/policy.js";
 import { runAgent } from "./runtime.js";
 
 config({ path: fileURLToPath(new URL("../../../.env", import.meta.url)), quiet: true });
@@ -21,6 +26,31 @@ app.get("/health", (c) =>
     profile: agentMode === "pi" ? getSelectedProfileId() : "deterministic-demo-v1",
   }),
 );
+
+app.get("/internal/config", (c) => {
+  if (c.req.header("x-internal-token") !== internalToken) {
+    return c.json({ error: "UNAUTHORIZED" }, 401);
+  }
+  return c.json({
+    mode: agentMode,
+    selectedProfileId: agentMode === "pi" ? getSelectedProfileId() : "deterministic-demo-v1",
+    profiles: listModelProfiles().map((profile) => ({
+      id: profile.id,
+      version: profile.version,
+      adapter: profile.adapter,
+      promptId: profile.prompt.id,
+      promptVersion: profile.prompt.version,
+      thinkingLevel: profile.agent.thinkingLevel,
+      contextWindow: profile.model.contextWindow,
+      maxTokens: profile.model.maxTokens,
+      recentMessageLimit: profile.agent.recentMessageLimit,
+      timeoutMs: profile.reliability.timeoutMs,
+      fallbackProfileId: profile.reliability.fallbackProfileId,
+      configured: isProfileConfigured(profile.id),
+    })),
+    policy: BI_AGENT_POLICY,
+  });
+});
 
 app.post("/internal/runs", async (c) => {
   if (c.req.header("x-internal-token") !== internalToken) {

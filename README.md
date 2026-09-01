@@ -9,6 +9,7 @@
 - AI Gateway 隔离模型厂商差异；
 - BI 查询服务在服务端强制应用权限快照；
 - 前端通过流式事件展示 Agent 运行过程和结构化分析结果。
+- Eval 管理控制台展示版本化评测集、运行结果、模型尝试和 Tool Trace。
 
 ## 系统结构
 
@@ -38,6 +39,7 @@ docs/
 ├── architecture.md
 ├── technology-stack.md
 ├── model-profiles.md
+├── evals.md
 └── api.md
 ```
 
@@ -97,7 +99,12 @@ npm run build
 - [架构设计](docs/architecture.md)
 - [技术栈与选型](docs/technology-stack.md)
 - [模型配置与 Prompt 管理](docs/model-profiles.md)
+- [Agent Eval 与管理控制台](docs/evals.md)
 - [API 与事件协议](docs/api.md)
+
+## Eval 管理控制台
+
+启动三个服务后访问 <http://localhost:3000/admin/evals>。内置 `eval_ds_core_v1@1.0.0`，包含 24 个覆盖正常、边界、安全、追问和多语言场景的案例。后台可以运行评测并查看逐案例断言、模型 Profile Attempt 与 Tool Trace。
 
 ## Demo 边界
 

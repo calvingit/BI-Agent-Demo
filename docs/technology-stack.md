@@ -18,6 +18,7 @@
 | Database | SQLite + better-sqlite3 | 13.0.3 | 单文件、事务可靠、本地调试简单 |
 | Build | Vite + tsup | 8.2.2 / 8.5.1 | 分别构建浏览器和 Node 服务 |
 | Test | Vitest | 4.1.11 | 与 Vite/TypeScript 体系一致 |
+| Eval | 内置确定性 Runner | Repository version | 同时判断最终结果和 Tool 轨迹，无外部平台依赖 |
 
 ## 前端为什么使用 TanStack Router，而不是 TanStack Start
 
@@ -120,3 +121,4 @@ Demo 提供两种 Runtime：
 | Kafka/队列 | Demo Run 较短；生产可恢复执行阶段再引入 |
 | Vector Database | 产品知识 RAG 尚未进入本轮 Demo |
 | 任意 SQL Agent | 无法可靠保证租户权限、查询预算和指标口径 |
+| 外部 Eval SaaS | 当前数据量小，先明确内部数据契约和评测标准，后续可通过导出接入 |

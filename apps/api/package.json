@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsup src/index.ts --format esm --platform node --out-dir dist",
+    "build": "tsup",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit"
   },

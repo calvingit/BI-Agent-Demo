@@ -13,6 +13,7 @@ import type {
   AgentRunRequest,
   BiQueryIntent,
   BiQueryResult,
+  ToolTraceEvent,
 } from "@bi-agent/contracts";
 import { buildAnswer } from "./answer-builder.js";
 import { queryBusinessData } from "./bi-client.js";
@@ -71,6 +72,7 @@ function extractLastAssistantText(agent: Agent): string | undefined {
 async function executeProfileAttempt(
   request: AgentRunRequest,
   resolved: ResolvedModelProfile,
+  onTrace: (event: ToolTraceEvent) => void,
   signal?: AbortSignal,
 ): Promise<{
   queryResult: BiQueryResult;
@@ -95,14 +97,47 @@ async function executeProfileAttempt(
     parameters: queryParameters,
     executionMode: profile.tools.executionMode,
     execute: async (_toolCallId, params, toolSignal) => {
+      const toolStartedAt = Date.now();
+      onTrace({
+        type: "tool.started",
+        runId: request.runId,
+        timestamp: timestamp(),
+        toolCallId: _toolCallId,
+        toolName: BI_AGENT_POLICY.toolName,
+        arguments: { intent: params.intent, days: params.days },
+      });
       selectedIntent = params.intent as BiQueryIntent;
-      queryResult = await queryBusinessData({
-        permissionSnapshotId: request.principal.permissionSnapshotId,
-        intent: selectedIntent,
-        days: params.days,
-        currency: request.preferences.currency,
-        timezone: request.preferences.timezone,
-        ...(toolSignal ? { signal: toolSignal } : {}),
+      try {
+        queryResult = await queryBusinessData({
+          permissionSnapshotId: request.principal.permissionSnapshotId,
+          intent: selectedIntent,
+          days: params.days,
+          currency: request.preferences.currency,
+          timezone: request.preferences.timezone,
+          ...(toolSignal ? { signal: toolSignal } : {}),
+        });
+      } catch (error) {
+        onTrace({
+          type: "tool.completed",
+          runId: request.runId,
+          timestamp: timestamp(),
+          toolCallId: _toolCallId,
+          toolName: BI_AGENT_POLICY.toolName,
+          status: "failed",
+          durationMs: Date.now() - toolStartedAt,
+          error: error instanceof Error ? error.message : "Unknown tool error",
+        });
+        throw error;
+      }
+      onTrace({
+        type: "tool.completed",
+        runId: request.runId,
+        timestamp: timestamp(),
+        toolCallId: _toolCallId,
+        toolName: BI_AGENT_POLICY.toolName,
+        status: "completed",
+        durationMs: Date.now() - toolStartedAt,
+        output: queryResult,
       });
       return {
         content: [{ type: "text", text: JSON.stringify(queryResult) }],
@@ -194,7 +229,7 @@ export async function* runWithPi(
     status: "running",
   };
 
-  let profileId = getSelectedProfileId();
+  let profileId = request.execution?.modelProfileId ?? getSelectedProfileId();
   const attemptedProfiles = new Set<string>();
   let completed:
     | {
@@ -207,6 +242,7 @@ export async function* runWithPi(
     if (attemptedProfiles.has(profileId)) throw new Error(`MODEL_PROFILE_FALLBACK_LOOP:${profileId}`);
     attemptedProfiles.add(profileId);
     const resolved = resolveModelProfile(profileId);
+    const attemptTraces: ToolTraceEvent[] = [];
     yield {
       type: "run.configured",
       runId: request.runId,
@@ -214,8 +250,16 @@ export async function* runWithPi(
       config: resolved.snapshot,
     };
     try {
-      completed = { result: await executeProfileAttempt(request, resolved, signal), resolved };
+      const result = await executeProfileAttempt(
+        request,
+        resolved,
+        (event) => attemptTraces.push(event),
+        signal,
+      );
+      for (const trace of attemptTraces) yield trace;
+      completed = { result, resolved };
     } catch (error) {
+      for (const trace of attemptTraces) yield trace;
       const fallbackProfileId = getModelProfile(profileId).reliability.fallbackProfileId;
       if (!canFallback(error) || !fallbackProfileId || !isProfileConfigured(fallbackProfileId)) throw error;
       yield {

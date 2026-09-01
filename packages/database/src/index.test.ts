@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
   createAgentRun,
+  appendAgentRunAttempt,
+  appendAgentTraceEvent,
   createMessage,
   createPermissionSnapshot,
   executeBiQuery,
   getAgentRunConfig,
+  getEvalDataset,
+  getEvalOverview,
   getPermissionSnapshot,
   getUserShops,
   seedDemoData,
   updateAgentRunConfig,
+  listAgentRunAttempts,
+  listAgentTraceEvents,
 } from "./index.js";
 
 describe("BI query authorization", () => {
@@ -76,5 +82,26 @@ describe("BI query authorization", () => {
       promptVersion: "1.0.0",
       model: "test-model",
     });
+    const config = getAgentRunConfig(runId)!;
+    appendAgentRunAttempt(runId, config);
+    appendAgentTraceEvent(runId, {
+      type: "tool.started",
+      runId,
+      timestamp: new Date().toISOString(),
+      toolCallId: "tool_test",
+      toolName: "query_business_metrics",
+      arguments: { intent: "overview", days: 30 },
+    });
+    expect(listAgentRunAttempts(runId)).toHaveLength(1);
+    expect(listAgentTraceEvents(runId)).toHaveLength(1);
+  });
+
+  it("seeds a versioned core evaluation dataset", () => {
+    const overview = getEvalOverview();
+    const dataset = getEvalDataset("eval_ds_core_v1");
+    expect(overview.datasetCount).toBe(1);
+    expect(overview.caseCount).toBe(24);
+    expect(dataset?.version).toBe("1.0.0");
+    expect(dataset?.cases.some((item) => item.category === "security")).toBe(true);
   });
 });

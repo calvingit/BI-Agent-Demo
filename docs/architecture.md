@@ -31,6 +31,8 @@ Demo 中 API Gateway 和多客业务 API 合并在 `apps/api`，生产环境可�
 | 业务 API | 身份、租户、积分、权限快照、会话、消息、Run | 自然语言理解 |
 | BI Agent | 上下文构造、Pi Loop、工具选择、结果解释 | 用户账户、原始 SQL、权限来源 |
 | Model Profile Registry | 绑定模型、Prompt、上下文和推理参数 | 业务权限和积分规则 |
+| Eval Runner | 执行版本化案例、计算确定性断言、汇总质量结果 | 修改生产 Prompt 或业务权限 |
+| Eval Admin | 配置浏览、数据集浏览、运行与 Trace Review | 直接访问 Agent 内部接口 |
 | AI Gateway | 模型路由、协议适配、密钥、限流、成本 | 经营数据和用户会话 |
 | BI Query API | 权限校验、聚合、指标公式、查询预算 | 文本生成 |
 | SQLite | Demo 业务状态和经营指标 | 生产数据仓库能力 |
@@ -150,12 +152,16 @@ stateDiagram-v2
 ```text
 run.started
 run.configured
+tool.started
+tool.completed
 analysis.step
 answer.delta
 answer.completed | run.failed
 ```
 
 业务 API 负责转发并拦截终止事件，以完成持久化和积分结算。前端只连接业务 API，不直接连接 Agent 服务。
+
+`tool.*` 事件属于内部可观测数据。业务 API 会保存但不转发到卖家对话界面；Eval 管理界面通过受保护的管理 API 读取。Eval 架构见[Agent Eval 与管理控制台](evals.md)。
 
 ## 10. 失败处理
 

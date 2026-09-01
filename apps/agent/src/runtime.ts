@@ -50,14 +50,49 @@ async function* runMock(
   await wait(120, signal);
   yield step(request, "permission", "已应用服务端权限快照", "completed");
   yield step(request, "query", "正在查询经营数据", "running");
-  const result = await queryBusinessData({
-    permissionSnapshotId: request.principal.permissionSnapshotId,
-    intent,
-    days,
-    currency: request.preferences.currency,
-    timezone: request.preferences.timezone,
-    ...(signal ? { signal } : {}),
-  });
+  const toolCallId = `tool_${request.runId}`;
+  const toolStartedAt = Date.now();
+  yield {
+    type: "tool.started",
+    runId: request.runId,
+    timestamp: timestamp(),
+    toolCallId,
+    toolName: "query_business_metrics",
+    arguments: { intent, days },
+  };
+  let result: BiQueryResult;
+  try {
+    result = await queryBusinessData({
+      permissionSnapshotId: request.principal.permissionSnapshotId,
+      intent,
+      days,
+      currency: request.preferences.currency,
+      timezone: request.preferences.timezone,
+      ...(signal ? { signal } : {}),
+    });
+  } catch (error) {
+    yield {
+      type: "tool.completed",
+      runId: request.runId,
+      timestamp: timestamp(),
+      toolCallId,
+      toolName: "query_business_metrics",
+      status: "failed",
+      durationMs: Date.now() - toolStartedAt,
+      error: error instanceof Error ? error.message : "Unknown tool error",
+    };
+    throw error;
+  }
+  yield {
+    type: "tool.completed",
+    runId: request.runId,
+    timestamp: timestamp(),
+    toolCallId,
+    toolName: "query_business_metrics",
+    status: "completed",
+    durationMs: Date.now() - toolStartedAt,
+    output: result,
+  };
   yield step(request, "query", `查询完成：${result.rows.length} 条聚合结果`, "completed");
   yield step(request, "analysis", "正在生成可核验的经营分析", "running");
   await wait(220, signal);

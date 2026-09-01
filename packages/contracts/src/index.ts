@@ -134,6 +134,11 @@ export const AgentRunRequestSchema = z.object({
     ),
     biState: BiConversationStateSchema,
   }),
+  execution: z
+    .object({
+      modelProfileId: z.string().min(1).optional(),
+    })
+    .optional(),
 });
 export type AgentRunRequest = z.infer<typeof AgentRunRequestSchema>;
 
@@ -148,6 +153,18 @@ export const AgentRunConfigSnapshotSchema = z.object({
   configHash: z.string().regex(/^[a-f0-9]{64}$/),
 });
 export type AgentRunConfigSnapshot = z.infer<typeof AgentRunConfigSnapshotSchema>;
+
+export const AgentRunAttemptSchema = z.object({
+  id: z.string(),
+  runId: z.string(),
+  attempt: z.number().int().positive(),
+  config: AgentRunConfigSnapshotSchema,
+  status: z.enum(["running", "completed", "failed"]),
+  errorCode: z.string().nullable(),
+  startedAt: z.string(),
+  completedAt: z.string().nullable(),
+});
+export type AgentRunAttempt = z.infer<typeof AgentRunAttemptSchema>;
 
 export const BiQueryIntentSchema = z.enum([
   "overview",
@@ -178,6 +195,27 @@ export const BiQueryResultSchema = z.object({
 });
 export type BiQueryResult = z.infer<typeof BiQueryResultSchema>;
 
+export const ToolStartedEventSchema = z.object({
+  type: z.literal("tool.started"),
+  runId: z.string(),
+  timestamp: z.string(),
+  toolCallId: z.string(),
+  toolName: z.string(),
+  arguments: z.record(z.string(), z.unknown()),
+});
+
+export const ToolCompletedEventSchema = z.object({
+  type: z.literal("tool.completed"),
+  runId: z.string(),
+  timestamp: z.string(),
+  toolCallId: z.string(),
+  toolName: z.string(),
+  status: z.enum(["completed", "failed"]),
+  durationMs: z.number().int().nonnegative(),
+  output: z.unknown().optional(),
+  error: z.string().optional(),
+});
+
 export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("run.started"),
@@ -204,6 +242,8 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
     timestamp: z.string(),
     delta: z.string(),
   }),
+  ToolStartedEventSchema,
+  ToolCompletedEventSchema,
   z.object({
     type: z.literal("answer.completed"),
     runId: z.string(),
@@ -228,6 +268,149 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   }),
 ]);
 export type AgentEvent = z.infer<typeof AgentEventSchema>;
+
+export const ToolTraceEventSchema = z.union([ToolStartedEventSchema, ToolCompletedEventSchema]);
+export type ToolTraceEvent = z.infer<typeof ToolTraceEventSchema>;
+
+export const EvalCategorySchema = z.enum([
+  "overview",
+  "ranking",
+  "trend",
+  "follow-up",
+  "boundary",
+  "security",
+  "multilingual",
+]);
+export type EvalCategory = z.infer<typeof EvalCategorySchema>;
+
+export const EvalExpectationsSchema = z.object({
+  expectedIntent: BiQueryIntentSchema,
+  expectedDays: z.number().int().min(7).max(90),
+  expectedAnswerType: z.enum(["overview", "ranking", "trend", "analysis"]),
+  expectedToolName: z.string(),
+  minToolCalls: z.number().int().nonnegative(),
+  maxToolCalls: z.number().int().nonnegative(),
+  expectedShopCount: z.number().int().nonnegative(),
+  requireEvidence: z.boolean(),
+  forbiddenPatterns: z.array(z.string()),
+});
+export type EvalExpectations = z.infer<typeof EvalExpectationsSchema>;
+
+export const EvalCaseSchema = z.object({
+  id: z.string(),
+  datasetId: z.string(),
+  name: z.string(),
+  category: EvalCategorySchema,
+  input: z.string(),
+  context: z.object({
+    recentMessages: z.array(z.object({ role: z.enum(["user", "assistant"]), text: z.string() })),
+    biState: BiConversationStateSchema,
+  }),
+  expectations: EvalExpectationsSchema,
+  tags: z.array(z.string()),
+  enabled: z.boolean(),
+});
+export type EvalCase = z.infer<typeof EvalCaseSchema>;
+
+export const EvalDatasetSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  version: z.string(),
+  status: z.enum(["draft", "published", "archived"]),
+  caseCount: z.number().int().nonnegative(),
+  createdAt: z.string(),
+});
+export type EvalDataset = z.infer<typeof EvalDatasetSchema>;
+
+export const EvalDatasetDetailSchema = EvalDatasetSchema.extend({ cases: z.array(EvalCaseSchema) });
+export type EvalDatasetDetail = z.infer<typeof EvalDatasetDetailSchema>;
+
+export const EvalAssertionSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  passed: z.boolean(),
+  expected: z.unknown(),
+  actual: z.unknown(),
+});
+export type EvalAssertion = z.infer<typeof EvalAssertionSchema>;
+
+export const EvalRunSchema = z.object({
+  id: z.string(),
+  datasetId: z.string(),
+  datasetName: z.string(),
+  datasetVersion: z.string(),
+  mode: z.enum(["mock", "pi"]),
+  requestedProfileId: z.string().nullable(),
+  status: z.enum(["queued", "running", "completed", "failed"]),
+  totalCases: z.number().int().nonnegative(),
+  passedCases: z.number().int().nonnegative(),
+  failedCases: z.number().int().nonnegative(),
+  score: z.number().min(0).max(1).nullable(),
+  createdAt: z.string(),
+  completedAt: z.string().nullable(),
+});
+export type EvalRun = z.infer<typeof EvalRunSchema>;
+
+export const EvalCaseResultSchema = z.object({
+  id: z.string(),
+  evalRunId: z.string(),
+  caseId: z.string(),
+  caseName: z.string(),
+  category: EvalCategorySchema,
+  agentRunId: z.string(),
+  status: z.enum(["passed", "failed", "error"]),
+  score: z.number().min(0).max(1),
+  durationMs: z.number().int().nonnegative(),
+  answer: BiAnswerSchema.nullable(),
+  assertions: z.array(EvalAssertionSchema),
+  attempts: z.array(AgentRunAttemptSchema),
+  traces: z.array(ToolTraceEventSchema),
+  errorCode: z.string().nullable(),
+});
+export type EvalCaseResult = z.infer<typeof EvalCaseResultSchema>;
+
+export const EvalRunDetailSchema = EvalRunSchema.extend({ results: z.array(EvalCaseResultSchema) });
+export type EvalRunDetail = z.infer<typeof EvalRunDetailSchema>;
+
+export const EvalOverviewSchema = z.object({
+  datasetCount: z.number().int().nonnegative(),
+  caseCount: z.number().int().nonnegative(),
+  runCount: z.number().int().nonnegative(),
+  latestPassRate: z.number().min(0).max(1).nullable(),
+  categoryCounts: z.array(z.object({ category: EvalCategorySchema, count: z.number().int() })),
+});
+export type EvalOverview = z.infer<typeof EvalOverviewSchema>;
+
+export const AgentConfigCatalogSchema = z.object({
+  mode: z.enum(["mock", "pi"]),
+  selectedProfileId: z.string(),
+  profiles: z.array(
+    z.object({
+      id: z.string(),
+      version: z.string(),
+      adapter: z.string(),
+      promptId: z.string(),
+      promptVersion: z.string(),
+      thinkingLevel: z.string(),
+      contextWindow: z.number().int(),
+      maxTokens: z.number().int(),
+      recentMessageLimit: z.number().int(),
+      timeoutMs: z.number().int(),
+      fallbackProfileId: z.string().nullable(),
+      configured: z.boolean(),
+    }),
+  ),
+  policy: z.object({
+    toolName: z.string(),
+    minQueryDays: z.number().int(),
+    maxQueryDays: z.number().int(),
+    allowedIntents: z.array(BiQueryIntentSchema),
+    allowRawSql: z.boolean(),
+    requirePermissionSnapshot: z.boolean(),
+  }),
+});
+export type AgentConfigCatalog = z.infer<typeof AgentConfigCatalogSchema>;
 
 export const BootstrapResponseSchema = z.object({
   user: UserSchema,

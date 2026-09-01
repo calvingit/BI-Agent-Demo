@@ -5,15 +5,26 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   AgentRunConfigSnapshot,
+  AgentRunAttempt,
   BiAnswer,
   BiConversationState,
   BiQueryRequest,
   BiQueryResult,
   Conversation,
+  EvalAssertion,
+  EvalCase,
+  EvalCaseResult,
+  EvalDataset,
+  EvalDatasetDetail,
+  EvalOverview,
+  EvalRun,
+  EvalRunDetail,
   Shop,
   StoredMessage,
+  ToolTraceEvent,
   User,
 } from "@bi-agent/contracts";
+import { DEFAULT_EVAL_DATASET } from "./eval-seed.js";
 
 const defaultDatabasePath = fileURLToPath(
   new URL("../../../data/bi-agent-demo.db", import.meta.url),
@@ -108,6 +119,83 @@ export function initializeDatabase(): void {
       completed_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS agent_trace_events (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      tool_call_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      duration_ms INTEGER,
+      status TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(run_id, sequence)
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_run_attempts (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      attempt INTEGER NOT NULL,
+      config_json TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed')),
+      error_code TEXT,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      UNIQUE(run_id, attempt)
+    );
+
+    CREATE TABLE IF NOT EXISTS eval_datasets (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      version TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('draft', 'published', 'archived')),
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS eval_cases (
+      id TEXT PRIMARY KEY,
+      dataset_id TEXT NOT NULL REFERENCES eval_datasets(id),
+      name TEXT NOT NULL,
+      category TEXT NOT NULL,
+      input TEXT NOT NULL,
+      context_json TEXT NOT NULL,
+      expectations_json TEXT NOT NULL,
+      tags_json TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS eval_runs (
+      id TEXT PRIMARY KEY,
+      dataset_id TEXT NOT NULL REFERENCES eval_datasets(id),
+      mode TEXT NOT NULL CHECK(mode IN ('mock', 'pi')),
+      requested_profile_id TEXT,
+      status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'completed', 'failed')),
+      total_cases INTEGER NOT NULL DEFAULT 0,
+      passed_cases INTEGER NOT NULL DEFAULT 0,
+      failed_cases INTEGER NOT NULL DEFAULT 0,
+      score REAL,
+      created_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS eval_case_results (
+      id TEXT PRIMARY KEY,
+      eval_run_id TEXT NOT NULL REFERENCES eval_runs(id),
+      case_id TEXT NOT NULL REFERENCES eval_cases(id),
+      agent_run_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('passed', 'failed', 'error')),
+      score REAL NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      answer_json TEXT,
+      assertions_json TEXT NOT NULL,
+      error_code TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(eval_run_id, case_id)
+    );
+
     CREATE TABLE IF NOT EXISTS permission_snapshots (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id),
@@ -132,6 +220,16 @@ export function initializeDatabase(): void {
       ON messages(conversation_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_metrics_date_shop
       ON daily_shop_metrics(date, shop_id);
+    CREATE INDEX IF NOT EXISTS idx_trace_events_run
+      ON agent_trace_events(run_id, sequence);
+    CREATE INDEX IF NOT EXISTS idx_run_attempts_run
+      ON agent_run_attempts(run_id, attempt);
+    CREATE INDEX IF NOT EXISTS idx_eval_cases_dataset
+      ON eval_cases(dataset_id, category);
+    CREATE INDEX IF NOT EXISTS idx_eval_runs_created
+      ON eval_runs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_eval_results_run
+      ON eval_case_results(eval_run_id, created_at);
   `);
 
   const runColumns = new Set(
@@ -157,10 +255,19 @@ export function initializeDatabase(): void {
 export function seedDemoData(force = false): void {
   initializeDatabase();
   const existing = sqlite.prepare("SELECT COUNT(*) AS count FROM users").get() as { count: number };
-  if (existing.count > 0 && !force) return;
+  if (existing.count > 0 && !force) {
+    seedDefaultEvalDataset();
+    return;
+  }
 
   const seed = sqlite.transaction(() => {
     sqlite.exec(`
+      DELETE FROM eval_case_results;
+      DELETE FROM eval_runs;
+      DELETE FROM eval_cases;
+      DELETE FROM eval_datasets;
+      DELETE FROM agent_run_attempts;
+      DELETE FROM agent_trace_events;
       DELETE FROM quota_ledger;
       DELETE FROM agent_runs;
       DELETE FROM messages;
@@ -236,6 +343,48 @@ export function seedDemoData(force = false): void {
   });
 
   seed();
+  seedDefaultEvalDataset();
+}
+
+export function seedDefaultEvalDataset(): void {
+  const existing = sqlite
+    .prepare("SELECT 1 AS found FROM eval_datasets WHERE id = ?")
+    .get(DEFAULT_EVAL_DATASET.id) as { found: number } | undefined;
+  if (existing) return;
+  const insert = sqlite.transaction(() => {
+    const createdAt = now();
+    sqlite
+      .prepare(`
+        INSERT INTO eval_datasets (id, name, description, version, status, created_at)
+        VALUES (?, ?, ?, ?, 'published', ?)
+      `)
+      .run(
+        DEFAULT_EVAL_DATASET.id,
+        DEFAULT_EVAL_DATASET.name,
+        DEFAULT_EVAL_DATASET.description,
+        DEFAULT_EVAL_DATASET.version,
+        createdAt,
+      );
+    const insertCase = sqlite.prepare(`
+      INSERT INTO eval_cases
+        (id, dataset_id, name, category, input, context_json, expectations_json, tags_json, enabled, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+    `);
+    for (const evalCase of DEFAULT_EVAL_DATASET.cases) {
+      insertCase.run(
+        evalCase.id,
+        DEFAULT_EVAL_DATASET.id,
+        evalCase.name,
+        evalCase.category,
+        evalCase.input,
+        JSON.stringify(evalCase.context ?? { recentMessages: [], biState: {} }),
+        JSON.stringify(evalCase.expectations),
+        JSON.stringify(evalCase.tags),
+        createdAt,
+      );
+    }
+  });
+  insert();
 }
 
 initializeDatabase();
@@ -544,6 +693,297 @@ export function getAgentRunConfig(runId: string): AgentRunConfigSnapshot | null 
     `)
     .get(runId) as AgentRunConfigSnapshot | undefined;
   return row?.mode ? row : null;
+}
+
+export function appendAgentRunAttempt(runId: string, config: AgentRunConfigSnapshot): void {
+  const append = sqlite.transaction(() => {
+    const row = sqlite
+      .prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM agent_run_attempts WHERE run_id = ?")
+      .get(runId) as { attempt: number };
+    sqlite
+      .prepare(`
+        INSERT INTO agent_run_attempts
+          (id, run_id, attempt, config_json, status, started_at)
+        VALUES (?, ?, ?, ?, 'running', ?)
+      `)
+      .run(id("attempt"), runId, row.attempt + 1, JSON.stringify(config), now());
+  });
+  append();
+}
+
+export function completeLatestAgentRunAttempt(
+  runId: string,
+  status: "completed" | "failed",
+  errorCode?: string,
+): void {
+  sqlite
+    .prepare(`
+      UPDATE agent_run_attempts SET status = ?, error_code = ?, completed_at = ?
+      WHERE run_id = ? AND attempt = (
+        SELECT MAX(attempt) FROM agent_run_attempts WHERE run_id = ?
+      )
+    `)
+    .run(status, errorCode ?? null, now(), runId, runId);
+}
+
+export function listAgentRunAttempts(runId: string): AgentRunAttempt[] {
+  const rows = sqlite
+    .prepare(`
+      SELECT id, run_id AS runId, attempt, config_json AS configJson,
+             status, error_code AS errorCode, started_at AS startedAt,
+             completed_at AS completedAt
+      FROM agent_run_attempts WHERE run_id = ? ORDER BY attempt
+    `)
+    .all(runId) as Array<Omit<AgentRunAttempt, "config"> & { configJson: string }>;
+  return rows.map(({ configJson, ...row }) => ({
+    ...row,
+    config: JSON.parse(configJson) as AgentRunConfigSnapshot,
+  }));
+}
+
+export function appendAgentTraceEvent(runId: string, event: ToolTraceEvent): void {
+  const append = sqlite.transaction(() => {
+    const row = sqlite
+      .prepare("SELECT COALESCE(MAX(sequence), 0) AS sequence FROM agent_trace_events WHERE run_id = ?")
+      .get(runId) as { sequence: number };
+    sqlite
+      .prepare(`
+        INSERT INTO agent_trace_events
+          (id, run_id, sequence, event_type, tool_call_id, tool_name, payload_json,
+           duration_ms, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        id("trace"),
+        runId,
+        row.sequence + 1,
+        event.type,
+        event.toolCallId,
+        event.toolName,
+        JSON.stringify(event),
+        event.type === "tool.completed" ? event.durationMs : null,
+        event.type === "tool.completed" ? event.status : null,
+        event.timestamp,
+      );
+  });
+  append();
+}
+
+export function listAgentTraceEvents(runId: string): ToolTraceEvent[] {
+  const rows = sqlite
+    .prepare("SELECT payload_json AS payload FROM agent_trace_events WHERE run_id = ? ORDER BY sequence")
+    .all(runId) as Array<{ payload: string }>;
+  return rows.map((row) => JSON.parse(row.payload) as ToolTraceEvent);
+}
+
+function mapEvalCase(row: {
+  id: string;
+  datasetId: string;
+  name: string;
+  category: EvalCase["category"];
+  input: string;
+  contextJson: string;
+  expectationsJson: string;
+  tagsJson: string;
+  enabled: number;
+}): EvalCase {
+  return {
+    id: row.id,
+    datasetId: row.datasetId,
+    name: row.name,
+    category: row.category,
+    input: row.input,
+    context: JSON.parse(row.contextJson) as EvalCase["context"],
+    expectations: JSON.parse(row.expectationsJson) as EvalCase["expectations"],
+    tags: JSON.parse(row.tagsJson) as string[],
+    enabled: Boolean(row.enabled),
+  };
+}
+
+export function listEvalDatasets(): EvalDataset[] {
+  return sqlite
+    .prepare(`
+      SELECT d.id, d.name, d.description, d.version, d.status,
+             COUNT(c.id) AS caseCount, d.created_at AS createdAt
+      FROM eval_datasets d
+      LEFT JOIN eval_cases c ON c.dataset_id = d.id AND c.enabled = 1
+      GROUP BY d.id
+      ORDER BY d.created_at DESC
+    `)
+    .all() as EvalDataset[];
+}
+
+export function getEvalDataset(datasetId: string): EvalDatasetDetail | null {
+  const dataset = listEvalDatasets().find((item) => item.id === datasetId);
+  if (!dataset) return null;
+  const rows = sqlite
+    .prepare(`
+      SELECT id, dataset_id AS datasetId, name, category, input,
+             context_json AS contextJson, expectations_json AS expectationsJson,
+             tags_json AS tagsJson, enabled
+      FROM eval_cases WHERE dataset_id = ? ORDER BY category, id
+    `)
+    .all(datasetId) as Parameters<typeof mapEvalCase>[0][];
+  return { ...dataset, cases: rows.map(mapEvalCase) };
+}
+
+export function getEvalOverview(): EvalOverview {
+  const counts = sqlite.prepare(`
+    SELECT (SELECT COUNT(*) FROM eval_datasets) AS datasetCount,
+           (SELECT COUNT(*) FROM eval_cases WHERE enabled = 1) AS caseCount,
+           (SELECT COUNT(*) FROM eval_runs) AS runCount
+  `).get() as Pick<EvalOverview, "datasetCount" | "caseCount" | "runCount">;
+  const latest = sqlite
+    .prepare("SELECT score FROM eval_runs WHERE status = 'completed' ORDER BY created_at DESC LIMIT 1")
+    .get() as { score: number | null } | undefined;
+  const categories = sqlite
+    .prepare(`
+      SELECT category, COUNT(*) AS count FROM eval_cases
+      WHERE enabled = 1 GROUP BY category ORDER BY category
+    `)
+    .all() as EvalOverview["categoryCounts"];
+  return { ...counts, latestPassRate: latest?.score ?? null, categoryCounts: categories };
+}
+
+type EvalRunRow = Omit<EvalRun, "score"> & { score: number | null };
+
+export function listEvalRuns(limit = 30): EvalRun[] {
+  return sqlite
+    .prepare(`
+      SELECT r.id, r.dataset_id AS datasetId, d.name AS datasetName,
+             d.version AS datasetVersion, r.mode,
+             r.requested_profile_id AS requestedProfileId, r.status,
+             r.total_cases AS totalCases, r.passed_cases AS passedCases,
+             r.failed_cases AS failedCases, r.score,
+             r.created_at AS createdAt, r.completed_at AS completedAt
+      FROM eval_runs r JOIN eval_datasets d ON d.id = r.dataset_id
+      ORDER BY r.created_at DESC LIMIT ?
+    `)
+    .all(limit) as EvalRunRow[];
+}
+
+export function createEvalRun(input: {
+  datasetId: string;
+  mode: "mock" | "pi";
+  requestedProfileId?: string;
+}): EvalRun {
+  const dataset = getEvalDataset(input.datasetId);
+  if (!dataset) throw new Error("EVAL_DATASET_NOT_FOUND");
+  const runId = id("evalrun");
+  const createdAt = now();
+  sqlite
+    .prepare(`
+      INSERT INTO eval_runs
+        (id, dataset_id, mode, requested_profile_id, status, total_cases, created_at)
+      VALUES (?, ?, ?, ?, 'queued', ?, ?)
+    `)
+    .run(
+      runId,
+      input.datasetId,
+      input.mode,
+      input.requestedProfileId ?? null,
+      dataset.cases.filter((item) => item.enabled).length,
+      createdAt,
+    );
+  return listEvalRuns().find((run) => run.id === runId)!;
+}
+
+export function markEvalRunRunning(runId: string): void {
+  sqlite.prepare("UPDATE eval_runs SET status = 'running' WHERE id = ?").run(runId);
+}
+
+export function saveEvalCaseResult(input: {
+  evalRunId: string;
+  caseId: string;
+  agentRunId: string;
+  status: "passed" | "failed" | "error";
+  score: number;
+  durationMs: number;
+  answer: BiAnswer | null;
+  assertions: EvalAssertion[];
+  errorCode?: string;
+}): void {
+  sqlite
+    .prepare(`
+      INSERT INTO eval_case_results
+        (id, eval_run_id, case_id, agent_run_id, status, score, duration_ms,
+         answer_json, assertions_json, error_code, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(
+      id("evalresult"),
+      input.evalRunId,
+      input.caseId,
+      input.agentRunId,
+      input.status,
+      input.score,
+      input.durationMs,
+      input.answer ? JSON.stringify(input.answer) : null,
+      JSON.stringify(input.assertions),
+      input.errorCode ?? null,
+      now(),
+    );
+}
+
+export function completeEvalRun(runId: string): void {
+  const aggregate = sqlite
+    .prepare(`
+      SELECT COUNT(*) AS total,
+             SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) AS passed,
+             SUM(CASE WHEN status != 'passed' THEN 1 ELSE 0 END) AS failed,
+             AVG(score) AS score
+      FROM eval_case_results WHERE eval_run_id = ?
+    `)
+    .get(runId) as { total: number; passed: number; failed: number; score: number | null };
+  sqlite
+    .prepare(`
+      UPDATE eval_runs SET status = 'completed', total_cases = ?, passed_cases = ?,
+        failed_cases = ?, score = ?, completed_at = ? WHERE id = ?
+    `)
+    .run(aggregate.total, aggregate.passed, aggregate.failed, aggregate.score, now(), runId);
+}
+
+export function failEvalRun(runId: string): void {
+  sqlite.prepare("UPDATE eval_runs SET status = 'failed', completed_at = ? WHERE id = ?").run(now(), runId);
+}
+
+export function getEvalRun(runId: string): EvalRunDetail | null {
+  const run = listEvalRuns(100).find((item) => item.id === runId);
+  if (!run) return null;
+  const rows = sqlite
+    .prepare(`
+      SELECT r.id, r.eval_run_id AS evalRunId, r.case_id AS caseId,
+             c.name AS caseName, c.category, r.agent_run_id AS agentRunId,
+             r.status, r.score, r.duration_ms AS durationMs,
+             r.answer_json AS answerJson, r.assertions_json AS assertionsJson,
+             r.error_code AS errorCode
+      FROM eval_case_results r JOIN eval_cases c ON c.id = r.case_id
+      WHERE r.eval_run_id = ? ORDER BY c.category, c.id
+    `)
+    .all(runId) as Array<{
+      id: string;
+      evalRunId: string;
+      caseId: string;
+      caseName: string;
+      category: EvalCaseResult["category"];
+      agentRunId: string;
+      status: EvalCaseResult["status"];
+      score: number;
+      durationMs: number;
+      answerJson: string | null;
+      assertionsJson: string;
+      errorCode: string | null;
+    }>;
+  return {
+    ...run,
+    results: rows.map(({ answerJson, assertionsJson, ...row }) => ({
+      ...row,
+      answer: answerJson ? (JSON.parse(answerJson) as BiAnswer) : null,
+      assertions: JSON.parse(assertionsJson) as EvalAssertion[],
+      attempts: listAgentRunAttempts(row.agentRunId),
+      traces: listAgentTraceEvents(row.agentRunId),
+    })),
+  };
 }
 
 function isoDateDaysAgo(days: number): string {

@@ -6,6 +6,7 @@ import {
   Check,
   CircleDollarSign,
   Clock3,
+  FlaskConical,
   MessageSquareText,
   Plus,
   Send,
@@ -118,6 +119,9 @@ export function Dashboard() {
         <button className="new-chat" onClick={() => createConversationMutation.mutate()}>
           <Plus size={17} /> 新建分析
         </button>
+        <Link to="/admin/evals" className="eval-admin-link">
+          <FlaskConical size={16} /> Eval 管理控制台
+        </Link>
         <div className="section-label">历史对话</div>
         <nav className="conversation-list">
           {bootstrap.data.conversations.map((conversation) => (

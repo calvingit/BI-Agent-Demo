@@ -9,17 +9,26 @@ import {
   type AgentRunRequest,
 } from "@bi-agent/contracts";
 import {
+  appendAgentRunAttempt,
+  appendAgentTraceEvent,
   createAgentRun,
   createConversation,
   createMessage,
   createPermissionSnapshot,
+  completeLatestAgentRunAttempt,
   executeBiQuery,
+  createEvalRun,
+  getEvalDataset,
+  getEvalOverview,
+  getEvalRun,
   getConversation,
   getConversationState,
   getQuotaBalance,
   getUser,
   getUserShops,
   listConversations,
+  listEvalDatasets,
+  listEvalRuns,
   listMessages,
   refundQuota,
   reserveQuota,
@@ -34,6 +43,7 @@ import { config } from "dotenv";
 import { cors } from "hono/cors";
 import { Hono } from "hono";
 import { z } from "zod";
+import { executeEvalRun, getAgentConfig } from "./eval-runner.js";
 
 config({ path: fileURLToPath(new URL("../../../.env", import.meta.url)), quiet: true });
 
@@ -99,6 +109,67 @@ app.post("/api/runs/:runId/cancel", (c) => {
   if (!run || run.userId !== c.get("userId")) return c.json({ error: "RUN_NOT_ACTIVE" }, 404);
   run.controller.abort();
   return c.json({ runId, status: "cancelling" });
+});
+
+app.get("/api/admin/agent-config", async (c) => {
+  try {
+    return c.json(await getAgentConfig({ agentBaseUrl, internalToken }));
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "AGENT_CONFIG_UNAVAILABLE" },
+      503,
+    );
+  }
+});
+
+app.get("/api/admin/evals/overview", (c) => c.json(getEvalOverview()));
+
+app.get("/api/admin/evals/datasets", (c) => c.json(listEvalDatasets()));
+
+app.get("/api/admin/evals/datasets/:datasetId", (c) => {
+  const dataset = getEvalDataset(c.req.param("datasetId"));
+  return dataset ? c.json(dataset) : c.json({ error: "EVAL_DATASET_NOT_FOUND" }, 404);
+});
+
+app.get("/api/admin/evals/runs", (c) => c.json(listEvalRuns()));
+
+app.get("/api/admin/evals/runs/:runId", (c) => {
+  const run = getEvalRun(c.req.param("runId"));
+  return run ? c.json(run) : c.json({ error: "EVAL_RUN_NOT_FOUND" }, 404);
+});
+
+app.post("/api/admin/evals/runs", async (c) => {
+  const body = z
+    .object({
+      datasetId: z.string().min(1),
+      profileId: z.string().min(1).optional(),
+      concurrency: z.number().int().min(1).max(5).default(3),
+    })
+    .parse(await c.req.json());
+  const dataset = getEvalDataset(body.datasetId);
+  if (!dataset) return c.json({ error: "EVAL_DATASET_NOT_FOUND" }, 404);
+  let agentConfig;
+  try {
+    agentConfig = await getAgentConfig({ agentBaseUrl, internalToken });
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "AGENT_CONFIG_UNAVAILABLE" },
+      503,
+    );
+  }
+  const requestedProfileId = body.profileId ?? agentConfig.selectedProfileId;
+  if (agentConfig.mode === "pi") {
+    const profile = agentConfig.profiles.find((item) => item.id === requestedProfileId);
+    if (!profile) return c.json({ error: "MODEL_PROFILE_NOT_FOUND" }, 400);
+    if (!profile.configured) return c.json({ error: "MODEL_PROFILE_NOT_CONFIGURED" }, 400);
+  }
+  const run = createEvalRun({
+    datasetId: body.datasetId,
+    mode: agentConfig.mode,
+    ...(agentConfig.mode === "pi" ? { requestedProfileId } : {}),
+  });
+  void executeEvalRun(run.id, body.concurrency, { agentBaseUrl, internalToken });
+  return c.json(run, 202);
 });
 
 app.post("/api/conversations/:conversationId/messages", async (c) => {
@@ -181,9 +252,16 @@ app.post("/api/conversations/:conversationId/messages", async (c) => {
             const event = AgentEventSchema.parse(JSON.parse(line));
             if (event.type === "run.configured") {
               updateAgentRunConfig(runId, event.config);
+              completeLatestAgentRunAttempt(runId, "failed", "MODEL_FALLBACK");
+              appendAgentRunAttempt(runId, event.config);
             }
-            send(event);
+            if (event.type === "tool.started" || event.type === "tool.completed") {
+              appendAgentTraceEvent(runId, event);
+            } else {
+              send(event);
+            }
             if (event.type === "answer.completed") {
+              completeLatestAgentRunAttempt(runId, "completed");
               const assistantMessageId = createMessage({
                 conversationId,
                 role: "assistant",
@@ -206,6 +284,7 @@ app.post("/api/conversations/:conversationId/messages", async (c) => {
               });
               terminal = true;
             } else if (event.type === "run.failed") {
+              completeLatestAgentRunAttempt(runId, "failed", event.code);
               refundQuota({ userId, runId, reservationId: quotaReservationId, amount: reservedCredits });
               updateAgentRun({ runId, status: "failed", errorCode: event.code });
               terminal = true;
@@ -222,6 +301,11 @@ app.post("/api/conversations/:conversationId/messages", async (c) => {
             status: cancelled ? "cancelled" : "failed",
             errorCode: cancelled ? "RUN_CANCELLED" : "AGENT_GATEWAY_ERROR",
           });
+          completeLatestAgentRunAttempt(
+            runId,
+            "failed",
+            cancelled ? "RUN_CANCELLED" : "AGENT_GATEWAY_ERROR",
+          );
           send({
             type: "run.failed",
             runId,

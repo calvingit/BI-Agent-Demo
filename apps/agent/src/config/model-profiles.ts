@@ -81,6 +81,10 @@ export function getModelProfile(profileId: string): ModelProfile {
   return profile;
 }
 
+export function listModelProfiles(): ModelProfile[] {
+  return [...profileRegistry.values()];
+}
+
 export function isProfileConfigured(profileId: string): boolean {
   const profile = getModelProfile(profileId);
   return [
@@ -142,4 +146,3 @@ export function getMockConfigSnapshot(): AgentRunConfigSnapshot {
     configHash: createHash("sha256").update(JSON.stringify(identity)).digest("hex"),
   };
 }
-
